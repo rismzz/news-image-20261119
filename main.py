@@ -1,59 +1,58 @@
 #!/usr/bin/env python3
-"""news-image-20261119 entrypoint.
+"""Entrypoint for the news-image-20261119 poster.
 
-Copies the poster image (entry.png, rendered by
-render_frontpage.py) to the Make.fun output directory.
-
-Runs with no network and no input: the same bytes on every run.
+Takes the poster rendered by render_frontpage.py (entry.png in
+this directory) and places a verified copy in the output
+directory Make.fun provides. Pure standard library, no
+network, no input: two runs always write the same bytes.
 """
 import os
 import shutil
 import struct
 import sys
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-SOURCE = os.path.join(HERE, "entry.png")
-MAX_BYTES = 1048576  # the competition's 1 MiB cap
-MAX_SIDE = 1024      # the competition's 1024x1024 pixel cap
+HERE = Path(__file__).resolve().parent
+IMAGE = HERE / "entry.png"
+SIZE_LIMIT = 1_048_576        # competition cap: 1 MiB
+SIDE_LIMIT = 1024             # competition cap: 1024x1024 px
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def png_size(path):
-    """(width, height) from the PNG IHDR chunk, stdlib only."""
-    with open(path, "rb") as fh:
-        head = fh.read(24)
-    if head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    return 1
+
+
+def read_dimensions(path):
+    """Width and height from the PNG IHDR chunk, or None."""
+    with path.open("rb") as handle:
+        head = handle.read(24)
+    if head[:8] != PNG_MAGIC or head[12:16] != b"IHDR":
         return None
     return struct.unpack(">II", head[16:24])
 
 
 def main():
-    if not os.path.isfile(SOURCE):
-        print(f"error: {SOURCE} missing", file=sys.stderr)
-        return 1
-    # Sanity-check the image before copying: PNG magic bytes, the
-    # competition's 1 MiB size cap and its 1024x1024 pixel cap.
-    with open(SOURCE, "rb") as fh:
-        head = fh.read(8)
-    if head != b"\x89PNG\r\n\x1a\n":
-        print("error: entry.png is not a PNG", file=sys.stderr)
-        return 1
-    if os.path.getsize(SOURCE) > MAX_BYTES:
-        print("error: entry.png exceeds 1 MiB", file=sys.stderr)
-        return 1
-    size = png_size(SOURCE)
-    if size is None or size[0] > MAX_SIDE or size[1] > MAX_SIDE:
-        print(f"error: entry.png size {size} breaks the pixel cap",
-              file=sys.stderr)
-        return 1
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out_dir, exist_ok=True)
-    dest = os.path.join(out_dir, "entry.png")
-    shutil.copyfile(SOURCE, dest)
-    # Verify the copy landed byte-complete before reporting success.
-    if os.path.getsize(dest) != os.path.getsize(SOURCE):
-        print("error: copied entry.png is incomplete", file=sys.stderr)
-        return 1
-    print(f"wrote {dest} ({os.path.getsize(dest)} bytes)")
+    if not IMAGE.is_file():
+        return fail(f"{IMAGE} is missing")
+    if IMAGE.stat().st_size > SIZE_LIMIT:
+        return fail("entry.png is over the 1 MiB cap")
+    with IMAGE.open("rb") as handle:
+        if handle.read(8) != PNG_MAGIC:
+            return fail("entry.png is not a PNG file")
+    dims = read_dimensions(IMAGE)
+    if dims is None:
+        return fail("entry.png has no readable IHDR chunk")
+    if dims[0] > SIDE_LIMIT or dims[1] > SIDE_LIMIT:
+        return fail(f"entry.png is {dims}, over the 1024x1024 cap")
+    target_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / "entry.png"
+    shutil.copyfile(IMAGE, target)
+    if target.stat().st_size != IMAGE.stat().st_size:
+        return fail("copied entry.png came out incomplete")
+    print(f"wrote {target} ({target.stat().st_size} bytes)")
     return 0
 
 

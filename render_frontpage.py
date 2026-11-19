@@ -1,34 +1,32 @@
 #!/usr/bin/env python3
-"""Render the poster for news-image-20261119.
+"""Draw the 19 November 2026 news poster (news-image-20261119).
 
-Draws a 1024x1024 high-contrast infographic poster summing up
-Thursday 19 November 2026's world news, using only Pillow and
-DejaVu fonts. Every story was cross-checked against multiple
-reports of 19 November 2026:
+A 1024x1024 infographic, "THE WORLD IN ONE DAY", built with
+Pillow and the DejaVu faces only. The stories are the day's
+verified headlines, each confirmed in more than one report
+dated 19 November 2026:
 
-- The first-ever US-China-Russia trilateral: Trump, Xi and Putin
-  meet in Shenzhen on the APEC sidelines (Xi met Putin on the
-  18th; Trump flew in from Quad talks in Manila and was met by
-  Xi at the airport). Agenda: Ukraine, Iran, Taiwan, rare earths
-  and AI chips.
-- The US-Iran exchange widens: US jets hit an IRGC missile site
-  on Qeshm Island; Iran answers with drones on US bases in
-  Bahrain and Kuwait.
-- Ukraine's strikes collapse a 227-m road arch of the Kerch
-  Bridge into the strait; Moscow vows to rebuild while Russia
-  hits Kyiv's Dnipro bridges in reply.
-- Democrats nominate Hakeem Jeffries for Speaker of the House —
-  set to be the first Black Speaker — days after Peltola's Alaska
-  win gave Democrats a 56-44 Senate majority.
-- Nvidia: founder Jensen Huang resigns; acting chief Colette
-  Kress halts H-series chip shipments to mainland China.
-- Cyclone Akvan bears down on India's east coast, set to cross
-  between Machilipatnam and Puri.
-- Also: GTA VI begins its global rollout; Voyager 1 reaches a
-  light-day from Earth; Fed minutes point to more rate hikes.
+- Shenzhen: Trump, Xi and Putin sit down together, the first
+  US-China-Russia trilateral, on the APEC sidelines. Xi met
+  Putin the day before; Trump flew in from Quad talks in
+  Manila. Ukraine, Iran, Taiwan, rare earths and AI chips are
+  on the table.
+- Gulf: American jets hit an IRGC missile site on Qeshm
+  Island; Iran fires drones at US bases in Bahrain and Kuwait.
+- Kerch Strait: a 227-metre road arch of the Kerch Bridge is
+  down in the water; Moscow promises a rebuild while Russian
+  missiles hit Kyiv's bridges over the Dnipro.
+- Washington: the Democrats nominate Hakeem Jeffries for
+  Speaker of the House; he would be the first Black Speaker.
+- Tech: Nvidia founder Jensen Huang resigns; acting chief
+  Colette Kress stops H-series chip shipments to China.
+- Weather: Cyclone Akvan closes on India's east coast and is
+  expected to cross between Machilipatnam and Puri.
+- Also in the ticker: GTA VI launches worldwide, Voyager 1
+  reaches a light-day from Earth, and the Fed's minutes point
+  to further rate hikes.
 
-Run:  python3 render_frontpage.py [output-path]
-Default output: entry.png next to this script.
+Usage: python3 render_frontpage.py [output.png]
 """
 import math
 import os
@@ -36,303 +34,352 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1024, 1024
-BG = (13, 22, 38)          # deep navy
-PANEL = (23, 38, 62)       # panel navy
-PANEL2 = (19, 32, 54)
-PAPER = (246, 241, 231)    # headline off-white
-BODY = (203, 211, 224)     # body light grey-blue
-RED = (226, 54, 48)
-ORANGE = (246, 148, 32)
-GOLD = (246, 198, 66)
-TEAL = (52, 186, 172)
-GREY = (148, 161, 180)
-SKY = (44, 74, 116)
-SEA = (26, 84, 138)
-WHITE = (255, 255, 255)
+SIZE = (1024, 1024)
+MARGIN = 34
+CW = SIZE[0] - 2 * MARGIN
 
-FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+PALETTE = {
+    "night": (12, 20, 36),
+    "card": (24, 40, 66),
+    "card2": (20, 34, 58),
+    "paper": (247, 242, 232),
+    "ink": (205, 213, 226),
+    "dim": (150, 163, 182),
+    "alarm": (228, 56, 50),
+    "amber": (247, 150, 34),
+    "gold": (247, 199, 68),
+    "mint": (54, 188, 174),
+    "sky": (46, 76, 118),
+    "sea": (28, 86, 140),
+    "white": (255, 255, 255),
+    "slate": (66, 76, 94),
+}
 
-
-def font(name, size):
-    return ImageFont.truetype(os.path.join(FONT_DIR, name), size)
-
-
-SERIF_B = lambda s: font("DejaVuSerif-Bold.ttf", s)
-SANS_B = lambda s: font("DejaVuSans-Bold.ttf", s)
-SANS = lambda s: font("DejaVuSans.ttf", s)
+FACES = "/usr/share/fonts/truetype/dejavu"
+_cache = {}
 
 
-def wrap(draw, text, fnt, max_width):
-    words = text.split()
-    lines, cur = [], ""
-    for word in words:
-        trial = (cur + " " + word).strip()
-        if draw.textlength(trial, font=fnt) <= max_width:
-            cur = trial
+def face(kind, size):
+    """A cached DejaVu face: kind is serif_b, sans_b or sans."""
+    key = (kind, size)
+    if key not in _cache:
+        names = {
+            "serif_b": "DejaVuSerif-Bold.ttf",
+            "sans_b": "DejaVuSans-Bold.ttf",
+            "sans": "DejaVuSans.ttf",
+        }
+        _cache[key] = ImageFont.truetype(
+            os.path.join(FACES, names[kind]), size)
+    return _cache[key]
+
+
+def split_lines(draw, text, fnt, width):
+    """Greedy word wrap, returning a list of lines."""
+    out, current = [], ""
+    for word in text.split():
+        trial = (current + " " + word).strip()
+        if draw.textlength(trial, font=fnt) <= width:
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+            if current:
+                out.append(current)
+            current = word
+    if current:
+        out.append(current)
+    return out
 
 
-def draw_lines(draw, lines, x, y, fnt, fill, leading):
-    for line in lines:
-        draw.text((x, y), line, font=fnt, fill=fill)
-        y += leading
-    return y
+class Poster:
+    """A 1024x1024 canvas with a y-cursor and small helpers."""
+
+    def __init__(self):
+        self.img = Image.new("RGB", SIZE, PALETTE["night"])
+        self.d = ImageDraw.Draw(self.img)
+        self.y = 0
+
+    def text(self, pos, s, fnt, colour):
+        self.d.text(pos, s, font=fnt, fill=colour)
+
+    def centre(self, y, s, fnt, colour):
+        w = self.d.textlength(s, font=fnt)
+        self.text(((SIZE[0] - w) / 2, y), s, fnt, colour)
+
+    def para(self, x, y, lines, fnt, colour, gap):
+        """Draw lines top to bottom, returning the y below them."""
+        for line in lines:
+            self.text((x, y), line, fnt, colour)
+            y += gap
+        return y
+
+    def panel(self, x, y, w, h, colour):
+        self.d.rectangle([x, y, x + w, y + h], fill=colour)
+
+    def pill(self, x, y, s, fnt, bg, fg):
+        w = self.d.textlength(s, font=fnt) + 22
+        self.d.rounded_rectangle([x, y, x + w, y + 30], radius=8, fill=bg)
+        self.text((x + 11, y + 6), s, fnt, fg)
+        return x + w + 10
+
+    def save(self, path):
+        self.img.save(path, "PNG", optimize=True)
+        print(f"wrote {path} ({os.path.getsize(path)} bytes)")
 
 
-def centered(draw, text, y, fnt, fill):
-    draw.text(((W - draw.textlength(text, font=fnt)) / 2, y), text,
-              font=fnt, fill=fill)
-
-
-def chip(draw, x, y, text, fnt, fill_bg, fill_tx):
-    w = draw.textlength(text, font=fnt) + 22
-    draw.rounded_rectangle([x, y, x + w, y + 30], radius=8, fill=fill_bg)
-    draw.text((x + 11, y + 6), text, font=fnt, fill=fill_tx)
-    return x + w + 10
-
-
-def draw_summit_scene(draw, x0, y0, x1, y1):
-    """Shenzhen trilateral: night skyline, a round table, three
-    leaders (red, gold, teal dots) around it."""
-    draw.rectangle([x0, y0, x1, y1], fill=SKY)
-    # skyline silhouettes
-    base = y0 + int((y1 - y0) * 0.52)
-    towers = [(x0 + 8, 0.30), (x0 + 52, 0.42), (x0 + 96, 0.24),
-              (x0 + 150, 0.38), (x0 + 196, 0.28), (x0 + 244, 0.44),
-              (x0 + 288, 0.32)]
-    for tx, frac in towers:
-        top = y0 + int((y1 - y0) * frac)
-        draw.rectangle([tx, top, tx + 34, base], fill=(18, 32, 56))
-        for wy in range(top + 12, base - 10, 18):
-            draw.rectangle([tx + 6, wy, tx + 12, wy + 8], fill=GOLD)
-            draw.rectangle([tx + 22, wy, tx + 28, wy + 8], fill=GOLD)
-    # tower spire on the tallest
-    draw.line([(x0 + 113, y0 + int((y1 - y0) * 0.24)),
-               (x0 + 113, y0 + int((y1 - y0) * 0.16))],
-              fill=(18, 32, 56), width=4)
-    # floor
-    draw.rectangle([x0, base, x1, y1], fill=(30, 52, 84))
-    # round table
+def skyline_scene(p, x0, y0, x1, y1):
+    """Night skyline above the summit table: towers, lit windows,
+    three leaders as coloured dots around a white table."""
+    p.panel(x0, y0, x1 - x0, y1 - y0, PALETTE["sky"])
+    floor = y0 + (y1 - y0) * 13 // 25
+    spans = [(6, 62, 30), (52, 84, 42), (100, 118, 24), (148, 108, 38),
+             (198, 96, 28), (240, 118, 44), (290, 104, 32)]
+    for off, tall, wide in spans:
+        top = floor - tall
+        p.d.rectangle([x0 + off, top, x0 + off + wide, floor],
+                      fill=(17, 30, 54))
+        for wy in range(top + 10, floor - 8, 17):
+            for wx in (off + 6, off + wide - 12):
+                p.d.rectangle([x0 + wx, wy, x0 + wx + 6, wy + 7],
+                              fill=PALETTE["gold"])
+    p.d.line([(x0 + 159, y0 + 8), (x0 + 159, y0 + 26)],
+             fill=(17, 30, 54), width=4)
+    p.panel(x0, floor, x1 - x0, y1 - floor, (31, 54, 86))
     cx = (x0 + x1) // 2
-    ty = base + 52
-    draw.ellipse([cx - 92, ty - 18, cx + 92, ty + 18], fill=PAPER)
-    draw.rectangle([cx - 10, ty + 12, cx + 10, y1 - 34], fill=PAPER)
-    # three leaders around the table
-    for ang, col in ((200, RED), (270, GOLD), (340, TEAL)):
-        px = cx + 62 * math.cos(math.radians(ang))
-        py = ty - 6 + 26 * math.sin(math.radians(ang))
-        draw.ellipse([px - 13, py - 13, px + 13, py + 13], fill=col)
-        draw.ellipse([px - 5, py - 5, px + 5, py + 5], fill=PAPER)
-    # name plates under the table
-    f_lab = SANS_B(14)
-    labels = "USA · CHINA · RUSSIA"
-    draw.text(((x0 + x1 - draw.textlength(labels, font=f_lab)) / 2,
-               y1 - 26), labels, font=f_lab, fill=WHITE)
+    ty = floor + 48
+    p.d.ellipse([cx - 88, ty - 16, cx + 88, ty + 16],
+                fill=PALETTE["paper"])
+    p.d.rectangle([cx - 9, ty + 11, cx + 9, y1 - 32], fill=PALETTE["paper"])
+    for ang, colour in ((205, PALETTE["alarm"]), (270, PALETTE["gold"]),
+                        (335, PALETTE["mint"])):
+        px = cx + 60 * math.cos(math.radians(ang))
+        py = ty - 4 + 24 * math.sin(math.radians(ang))
+        p.d.ellipse([px - 12, py - 12, px + 12, py + 12], fill=colour)
+        p.d.ellipse([px - 4, py - 4, px + 4, py + 4], fill=PALETTE["paper"])
+    tag = "USA · CHINA · RUSSIA"
+    f = face("sans_b", 14)
+    p.text((((x0 + x1) - p.d.textlength(tag, font=f)) / 2, y1 - 25),
+           tag, f, PALETTE["white"])
 
 
-def draw_bridge_icon(draw, cx, cy):
-    """Mini Kerch Bridge: deck with a gap, blast, fallen span."""
-    draw.ellipse([cx - 27, cy - 27, cx + 27, cy + 27], fill=(28, 56, 84))
-    draw.rectangle([cx - 20, cy - 2, cx - 6, cy + 2], fill=PAPER)
-    draw.rectangle([cx + 6, cy - 2, cx + 20, cy + 2], fill=PAPER)
-    draw.line([(cx - 14, cy - 2), (cx - 14, cy - 16)], fill=PAPER, width=2)
-    draw.line([(cx + 14, cy - 2), (cx + 14, cy - 16)], fill=PAPER, width=2)
-    pts = []
+def rocket_icon(p, cx, cy):
+    """A small rocket climbing out of its blast circle."""
+    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(66, 36, 42))
+    p.d.polygon([(cx - 16, cy + 18), (cx + 2, cy - 22),
+                 (cx + 16, cy - 10), (cx - 2, cy + 24)],
+                fill=PALETTE["paper"])
+    p.d.polygon([(cx + 2, cy - 22), (cx + 10, cy - 30),
+                 (cx + 16, cy - 10)], fill=PALETTE["alarm"])
+    p.d.polygon([(cx - 16, cy + 18), (cx - 26, cy + 26),
+                 (cx - 8, cy + 26)], fill=PALETTE["amber"])
+    p.d.polygon([(cx - 4, cy + 24), (cx - 12, cy + 30),
+                 (cx + 2, cy + 29)], fill=PALETTE["gold"])
+
+
+def bridge_icon(p, cx, cy):
+    """A deck with its middle span gone, blast above, sea below."""
+    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(30, 58, 86))
+    p.d.rectangle([cx - 21, cy - 3, cx - 7, cy + 1], fill=PALETTE["paper"])
+    p.d.rectangle([cx + 7, cy - 3, cx + 21, cy + 1], fill=PALETTE["paper"])
+    p.d.line([(cx - 15, cy - 3), (cx - 15, cy - 17)], fill=PALETTE["paper"],
+             width=2)
+    p.d.line([(cx + 15, cy - 3), (cx + 15, cy - 17)], fill=PALETTE["paper"],
+             width=2)
+    star = []
     for i in range(8):
         ang = math.pi * i / 4
-        r = 9 if i % 2 == 0 else 4
-        pts.append((cx + r * math.cos(ang), cy - 8 + r * math.sin(ang)))
-    draw.polygon(pts, fill=ORANGE)
-    draw.ellipse([cx - 3, cy - 11, cx + 3, cy - 5], fill=RED)
-    draw.line([(cx - 4, cy + 4), (cx + 8, cy + 14)], fill=(196, 60, 44),
-              width=3)
-    draw.arc([cx - 18, cy + 12, cx + 18, cy + 22], 0, 180,
-             fill=(170, 205, 235), width=2)
-
-
-def draw_missile(draw, cx, cy):
-    draw.ellipse([cx - 27, cy - 27, cx + 27, cy + 27], fill=(64, 34, 40))
-    draw.polygon([(cx - 14, cy + 16), (cx + 4, cy - 20),
-                  (cx + 16, cy - 8), (cx - 2, cy + 24)], fill=PAPER)
-    draw.polygon([(cx + 4, cy - 20), (cx + 12, cy - 30),
-                  (cx + 16, cy - 8)], fill=RED)
-    draw.polygon([(cx - 14, cy + 16), (cx - 24, cy + 26),
-                  (cx - 8, cy + 26)], fill=ORANGE)
-    draw.polygon([(cx - 4, cy + 30), (cx - 14, cy + 40),
-                  (cx + 2, cy + 38)], fill=GOLD)
-
-
-def draw_dome(draw, cx, cy):
-    draw.ellipse([cx - 27, cy - 27, cx + 27, cy + 27], fill=(52, 44, 84))
-    draw.arc([cx - 16, cy - 6, cx + 16, cy + 22], 180, 360, fill=PAPER,
+        r = 10 if i % 2 == 0 else 5
+        star.append((cx + r * math.cos(ang),
+                     cy - 9 + r * math.sin(ang)))
+    p.d.polygon(star, fill=PALETTE["amber"])
+    p.d.ellipse([cx - 3, cy - 12, cx + 3, cy - 6], fill=PALETTE["alarm"])
+    p.d.line([(cx - 5, cy + 3), (cx + 9, cy + 15)], fill=(198, 62, 46),
              width=3)
-    draw.line([(cx - 20, cy + 8), (cx + 20, cy + 8)], fill=PAPER, width=3)
-    draw.line([(cx, cy - 14), (cx, cy - 6)], fill=GOLD, width=3)
-    for px in (-12, 0, 12):
-        draw.line([(cx + px, cy + 8), (cx + px, cy + 16)], fill=PAPER,
-                  width=2)
-    draw.line([(cx - 20, cy + 17), (cx + 20, cy + 17)], fill=PAPER,
-              width=3)
+    p.d.arc([cx - 19, cy + 13, cx + 19, cy + 23], 0, 180,
+            fill=(172, 207, 237), width=2)
 
 
-def draw_chip(draw, cx, cy):
-    draw.ellipse([cx - 27, cy - 27, cx + 27, cy + 27], fill=(24, 52, 44))
-    for px in (-14, 0, 14):
-        draw.line([(cx + px, cy - 26), (cx + px, cy - 16)], fill=GOLD,
-                  width=3)
-        draw.line([(cx + px, cy + 16), (cx + px, cy + 26)], fill=GOLD,
-                  width=3)
-        draw.line([(cx - 26, cy + px), (cx - 16, cy + px)], fill=GOLD,
-                  width=3)
-        draw.line([(cx + 16, cy + px), (cx + 26, cy + px)], fill=GOLD,
-                  width=3)
-    draw.rectangle([cx - 16, cy - 16, cx + 16, cy + 16], fill=TEAL)
-    draw.rectangle([cx - 8, cy - 8, cx + 8, cy + 8], fill=(13, 22, 38))
+def dome_icon(p, cx, cy):
+    """A capitol dome: arch, columns, base."""
+    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(54, 46, 86))
+    p.d.arc([cx - 17, cy - 7, cx + 17, cy + 21], 180, 360,
+            fill=PALETTE["paper"], width=3)
+    p.d.line([(cx - 21, cy + 7), (cx + 21, cy + 7)], fill=PALETTE["paper"],
+             width=3)
+    p.d.line([(cx, cy - 15), (cx, cy - 7)], fill=PALETTE["gold"], width=3)
+    for px in (-13, 0, 13):
+        p.d.line([(cx + px, cy + 7), (cx + px, cy + 15)],
+                 fill=PALETTE["paper"], width=2)
+    p.d.line([(cx - 21, cy + 16), (cx + 21, cy + 16)],
+             fill=PALETTE["paper"], width=3)
 
 
-def draw_storm(draw, cx, cy):
-    draw.ellipse([cx - 27, cy - 27, cx + 27, cy + 27], fill=(28, 56, 84))
-    for r, a0 in ((17, 20), (11, 200), (6, 90)):
-        draw.arc([cx - r, cy - r, cx + r, cy + r], a0, a0 + 260,
-                 fill=TEAL, width=3)
-    draw.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], fill=PAPER)
+def chip_icon(p, cx, cy):
+    """A processor: square die, gold pins on four sides."""
+    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(26, 54, 46))
+    for px in (-15, 0, 15):
+        p.d.line([(cx + px, cy - 27), (cx + px, cy - 17)],
+                 fill=PALETTE["gold"], width=3)
+        p.d.line([(cx + px, cy + 17), (cx + px, cy + 27)],
+                 fill=PALETTE["gold"], width=3)
+        p.d.line([(cx - 27, cy + px), (cx - 17, cy + px)],
+                 fill=PALETTE["gold"], width=3)
+        p.d.line([(cx + 17, cy + px), (cx + 27, cy + px)],
+                 fill=PALETTE["gold"], width=3)
+    p.d.rectangle([cx - 17, cy - 17, cx + 17, cy + 17], fill=PALETTE["mint"])
+    p.d.rectangle([cx - 9, cy - 9, cx + 9, cy + 9], fill=PALETTE["night"])
+
+
+def storm_icon(p, cx, cy):
+    """A cyclone: three spiral arcs around a calm eye."""
+    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(30, 58, 86))
+    for r, start in ((18, 15), (12, 195), (7, 85)):
+        p.d.arc([cx - r, cy - r, cx + r, cy + r], start, start + 255,
+                fill=PALETTE["mint"], width=3)
+    p.d.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], fill=PALETTE["paper"])
+
+
+def story_card(p, x, y, w, h, kicker, colour, headline, body, icon,
+               date="19 NOV 2026"):
+    """One news panel: icon + kicker + headline + body text."""
+    p.panel(x, y, w, h, PALETTE["card"])
+    icon(p, x + 44, y + 44)
+    p.text((x + 82, y + 18), kicker, face("sans_b", 16), colour)
+    p.text((x + 82, y + 42), date, face("sans", 14), PALETTE["dim"])
+    hy = y + 76
+    hy = p.para(x + 18, hy,
+                split_lines(p.d, headline, face("serif_b", 28), w - 36),
+                face("serif_b", 28), PALETTE["paper"], 34)
+    end = p.para(x + 18, hy + 4,
+                 split_lines(p.d, body, face("sans", 18), w - 36),
+                 face("sans", 18), PALETTE["ink"], 24)
+    assert end <= y + h - 8, f"card text overflows: {kicker} end={end}"
+    return end
+
+
+def mini_card(p, x, y, w, h, kicker, colour, headline, body, icon):
+    """A narrower third-band panel (icon row, then headline/body)."""
+    p.panel(x, y, w, h, PALETTE["card2"])
+    icon(p, x + 40, y + 40)
+    p.text((x + 74, y + 20), kicker, face("sans_b", 15), colour)
+    p.text((x + 74, y + 42), "19 NOV", face("sans", 13), PALETTE["dim"])
+    hy = y + 70
+    hy = p.para(x + 15, hy,
+                split_lines(p.d, headline, face("serif_b", 24), w - 30),
+                face("serif_b", 24), PALETTE["paper"], 29)
+    end = p.para(x + 15, hy + 3,
+                 split_lines(p.d, body, face("sans", 16), w - 30),
+                 face("sans", 16), PALETTE["ink"], 21)
+    assert end <= y + h - 8, f"mini card overflows: {kicker} end={end}"
+    return end
+
+
+def build():
+    p = Poster()
+    d = p.d
+
+    # ---- masthead ----
+    p.y = 18
+    p.centre(p.y, "THE WORLD IN ONE DAY", face("serif_b", 44),
+             PALETTE["paper"])
+    p.y += 56
+    p.panel(MARGIN, p.y, CW, 32, PALETTE["alarm"])
+    p.centre(p.y + 4, "THURSDAY · 19 NOVEMBER 2026",
+             face("sans_b", 24), PALETTE["white"])
+    p.y += 46
+
+    # ---- lead story: Shenzhen ----
+    lead_top, lead_h = p.y, 330
+    p.panel(MARGIN, lead_top, CW, lead_h, PALETTE["card"])
+    lx, ly = MARGIN + 22, lead_top + 12
+    p.text((lx, ly), "SHENZHEN — THE DAY'S BIG STORY",
+           face("sans_b", 19), PALETTE["gold"])
+    ly += 30
+    ly = p.para(lx, ly, ["THREE PRESIDENTS,", "ONE TABLE"],
+                face("serif_b", 46), PALETTE["paper"], 54)
+    ly += 6
+    ly = p.para(lx, ly,
+                split_lines(d, "Trump, Xi & Putin meet today — the "
+                            "first US–China–Russia trilateral, with "
+                            "Ukraine, Iran and Taiwan on the agenda.",
+                            face("sans", 20), 545),
+                face("sans", 20), PALETTE["ink"], 27)
+    skyline_scene(p, 622, lead_top + 18, SIZE[0] - MARGIN - 18,
+                  lead_top + 252)
+    p.text((622, lead_top + 258), "Shenzhen hosts the APEC leaders' "
+           "summit.", face("sans", 14), PALETTE["dim"])
+    chip_y = lead_top + lead_h - 42
+    assert ly <= chip_y - 6, f"lead text runs into chips: ly={ly}"
+    cx = MARGIN + 22
+    f_chip = face("sans_b", 16)
+    cx = p.pill(cx, chip_y, "FIRST-EVER TRILATERAL", f_chip,
+                PALETTE["alarm"], PALETTE["white"])
+    cx = p.pill(cx, chip_y, "APEC · SHENZHEN", f_chip,
+                PALETTE["slate"], PALETTE["white"])
+    cx = p.pill(cx, chip_y, "XI MET PUTIN WEDNESDAY", f_chip,
+                PALETTE["slate"], PALETTE["white"])
+    assert cx <= SIZE[0] - MARGIN, f"chips overflow: cx={cx}"
+    p.y = lead_top + lead_h + 12
+
+    # ---- middle band: Gulf + Kerch ----
+    band_h = 228
+    half = (CW - 16) // 2
+    story_card(p, MARGIN, p.y, half, band_h,
+               "MIDDLE EAST — ESCALATION", PALETTE["alarm"],
+               "US–Iran fire widens across the Gulf",
+               "US jets hit an IRGC missile site on Qeshm Island. "
+               "Iran answers with drones on US bases in Bahrain & "
+               "Kuwait.", rocket_icon)
+    story_card(p, MARGIN + half + 16, p.y, half, band_h,
+               "UKRAINE WAR", PALETTE["gold"],
+               "Kerch Bridge arch is down",
+               "A 227-m road arch fell into the strait. Moscow vows "
+               "to rebuild as Russia hits Kyiv's Dnipro bridges.",
+               bridge_icon)
+    p.y += band_h + 12
+
+    # ---- third band: Speaker / Nvidia / Cyclone ----
+    band2_h = 184
+    col_w = (CW - 32) // 3
+    mini_card(p, MARGIN, p.y, col_w, band2_h,
+              "UNITED STATES", PALETTE["gold"],
+              "Jeffries for Speaker",
+              "Democrats nominate Hakeem Jeffries — set to be the "
+              "first Black Speaker.", dome_icon)
+    mini_card(p, MARGIN + col_w + 16, p.y, col_w, band2_h,
+              "TECH", PALETTE["mint"],
+              "Nvidia's chief is out",
+              "Founder Jensen Huang resigns. Acting chief Kress "
+              "halts H-chip shipments to China.", chip_icon)
+    mini_card(p, MARGIN + 2 * (col_w + 16), p.y, col_w, band2_h,
+              "DISASTER", PALETTE["alarm"],
+              "Akvan nears India",
+              "Akvan bears down on the east coast, set to cross "
+              "between Machilipatnam and Puri.", storm_icon)
+    p.y += band2_h + 12
+
+    # ---- ticker + footer ----
+    p.panel(MARGIN, p.y, CW, 40, (122, 28, 24))
+    ticker = ("GTA VI LAUNCHES TODAY · VOYAGER 1 HITS LIGHT-DAY "
+              "· FED EYES MORE HIKES")
+    assert d.textlength(ticker, font=face("sans_b", 20)) <= CW - 8, \
+        "ticker too wide"
+    p.centre(p.y + 9, ticker, face("sans_b", 20), PALETTE["white"])
+    p.y += 52
+    extra = ("ISRAEL PUSHES INTO CENTRAL GAZA · AUSTRALIA SANCTIONS "
+             "SETTLERS · MOLDOVA SUMMONS RUSSIAN ENVOY")
+    p.centre(p.y, extra, face("sans_b", 15), PALETTE["dim"])
+    p.y += 26
+    p.centre(p.y, "Top stories of Thursday, 19 November 2026 — "
+             "verified against multiple reports of the day",
+             face("sans", 14), PALETTE["dim"])
+    p.y += 20
+    assert p.y <= SIZE[1] - 6, f"layout overflow: y={p.y}"
+    return p
 
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "entry.png")
-    img = Image.new("RGB", (W, H), BG)
-    d = ImageDraw.Draw(img)
-    M = 36
-    CW = W - 2 * M
-
-    # ---- Masthead ----
-    y = 16
-    centered(d, "THE WORLD IN ONE DAY", y, SERIF_B(47), PAPER)
-    y += 58
-    d.rectangle([M, y, W - M, y + 34], fill=RED)
-    centered(d, "THURSDAY · 19 NOVEMBER 2026", y + 4, SANS_B(25), WHITE)
-    y += 48
-
-    # ---- Lead: Shenzhen trilateral ----
-    lead_y0 = y
-    lead_y1 = y + 340
-    d.rectangle([M, lead_y0, W - M, lead_y1], fill=PANEL)
-    tx = M + 22
-    ty = lead_y0 + 12
-    d.text((tx, ty), "SHENZHEN — THE DAY'S BIG STORY", font=SANS_B(19),
-           fill=GOLD)
-    ty += 30
-    f_lead = SERIF_B(46)
-    ty = draw_lines(d, ["THREE PRESIDENTS,", "ONE TABLE"],
-                    tx, ty, f_lead, PAPER, 54)
-    ty += 6
-    sub = ("Trump, Xi & Putin meet today — the first US–China–Russia "
-           "trilateral, with Ukraine, Iran and Taiwan on the agenda.")
-    ty = draw_lines(d, wrap(d, sub, SANS(20), 545), tx, ty, SANS(20),
-                    BODY, 27)
-    # illustration, right side of the lead panel
-    draw_summit_scene(d, 622, lead_y0 + 18, W - M - 18, lead_y0 + 252)
-    f_cap = SANS(14)
-    d.text((622, lead_y0 + 258),
-           "Shenzhen hosts the APEC leaders' summit.",
-           font=f_cap, fill=GREY)
-    # chips along the bottom of the lead panel
-    cy = lead_y1 - 42
-    assert ty <= cy - 6, f"lead text overflows into chips: ty={ty} cy={cy}"
-    cx = M + 22
-    f_chip = SANS_B(16)
-    cx = chip(d, cx, cy, "FIRST-EVER TRILATERAL", f_chip, RED, WHITE)
-    cx = chip(d, cx, cy, "APEC · SHENZHEN", f_chip, (64, 74, 92), WHITE)
-    cx = chip(d, cx, cy, "XI MET PUTIN WEDNESDAY", f_chip,
-              (64, 74, 92), WHITE)
-    assert cx <= W - M, f"chips overflow panel: cx={cx}"
-    y = lead_y1 + 12
-
-    # ---- Middle band: Gulf + Kerch ----
-    band_y1 = y + 232
-    half = (CW - 16) // 2
-    panels = [
-        (M, "MIDDLE EAST — ESCALATION", RED,
-         "US–Iran fire widens across the Gulf",
-         "US jets hit an IRGC missile site on Qeshm Island. Iran "
-         "answers with drones on US bases in Bahrain & Kuwait.",
-         draw_missile),
-        (M + half + 16, "UKRAINE WAR", GOLD,
-         "Kerch Bridge arch is down",
-         "A 227-m road arch fell into the strait. Moscow vows to "
-         "rebuild as Russia hits Kyiv's Dnipro bridges.",
-         draw_bridge_icon),
-    ]
-    for px, kick, accent, head, body, icon in panels:
-        d.rectangle([px, y, px + half, band_y1], fill=PANEL)
-        icon(d, px + 44, y + 44)
-        d.text((px + 82, y + 18), kick, font=SANS_B(16), fill=accent)
-        d.text((px + 82, y + 42), "19 NOV 2026", font=SANS(14), fill=GREY)
-        hy = y + 76
-        hy = draw_lines(d, wrap(d, head, SERIF_B(28), half - 36),
-                        px + 18, hy, SERIF_B(28), PAPER, 34)
-        end_y = draw_lines(d, wrap(d, body, SANS(18), half - 36),
-                           px + 18, hy + 4, SANS(18), BODY, 24)
-        assert end_y <= band_y1 - 8, \
-            f"middle-band text overflows panel: end_y={end_y}"
-    y = band_y1 + 12
-
-    # ---- Third band: Speaker / Nvidia / Cyclone ----
-    band2_y1 = y + 186
-    col_w = (CW - 32) // 3
-    cols = [
-        ("UNITED STATES", GOLD, "Jeffries for Speaker",
-         "Democrats nominate Hakeem Jeffries — set to be the first "
-         "Black Speaker.", draw_dome),
-        ("TECH", TEAL, "Nvidia's chief is out",
-         "Founder Jensen Huang resigns. Acting chief Kress halts "
-         "H-chip shipments to China.", draw_chip),
-        ("DISASTER", RED, "Akvan nears India",
-         "Akvan bears down on the east coast, set to cross between "
-         "Machilipatnam and Puri.", draw_storm),
-    ]
-    for i, (kick, accent, head, body, icon) in enumerate(cols):
-        px = M + i * (col_w + 16)
-        d.rectangle([px, y, px + col_w, band2_y1], fill=PANEL2)
-        icon(d, px + 40, y + 40)
-        d.text((px + 74, y + 20), kick, font=SANS_B(15), fill=accent)
-        d.text((px + 74, y + 42), "19 NOV", font=SANS(13), fill=GREY)
-        hy = y + 70
-        hy = draw_lines(d, wrap(d, head, SERIF_B(24), col_w - 30),
-                        px + 15, hy, SERIF_B(24), PAPER, 29)
-        end_y = draw_lines(d, wrap(d, body, SANS(16), col_w - 30),
-                           px + 15, hy + 3, SANS(16), BODY, 21)
-        assert end_y <= band2_y1 - 8, \
-            f"third-band text overflows panel: end_y={end_y}"
-    y = band2_y1 + 12
-
-    # ---- Ticker ----
-    d.rectangle([M, y, W - M, y + 42], fill=(120, 26, 22))
-    ticker = ("GTA VI LAUNCHES TODAY · VOYAGER 1 HITS LIGHT-DAY "
-              "· FED EYES MORE HIKES")
-    assert d.textlength(ticker, font=SANS_B(20)) <= CW - 8, \
-        "ticker too wide for the panel"
-    centered(d, ticker, y + 9, SANS_B(20), WHITE)
-    y += 54
-    extra = ("ISRAEL PUSHES INTO CENTRAL GAZA · AUSTRALIA SANCTIONS "
-             "SETTLERS · MOLDOVA SUMMONS RUSSIAN ENVOY")
-    centered(d, extra, y, SANS_B(15), GREY)
-    y += 26
-    foot = "Top stories of Thursday, 19 November 2026 — verified against multiple reports of the day"
-    centered(d, foot, y, SANS(14), GREY)
-    y += 20
-    assert y <= H - 6, f"layout overflow: final y={y}"
-
-    img.save(out, "PNG", optimize=True)
-    print(f"wrote {out} ({os.path.getsize(out)} bytes)")
+    build().save(out)
 
 
 if __name__ == "__main__":
