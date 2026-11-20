@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Entrypoint for the news-image-20261119 poster.
+"""Entrypoint for the news-image-20261119 round 2 poster.
 
-Takes the poster rendered by render_frontpage.py (entry.png in
-this directory) and places a verified copy in the output
-directory Make.fun provides. Pure standard library, no
-network, no input: two runs always write the same bytes.
+Copies the rendered broadsheet (entry.png, drawn by
+render_frontpage.py in this directory) into the output directory
+Make.fun provides. Pure standard library, no network, no input:
+two runs always write the same bytes.
 """
+import hashlib
 import os
 import shutil
 import struct
@@ -33,6 +34,14 @@ def read_dimensions(path):
     return struct.unpack(">II", head[16:24])
 
 
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main():
     if not IMAGE.is_file():
         return fail(f"{IMAGE} is missing")
@@ -52,7 +61,10 @@ def main():
     shutil.copyfile(IMAGE, target)
     if target.stat().st_size != IMAGE.stat().st_size:
         return fail("copied entry.png came out incomplete")
-    print(f"wrote {target} ({target.stat().st_size} bytes)")
+    if sha256_of(target) != sha256_of(IMAGE):
+        return fail("copied entry.png does not match the source bytes")
+    print(f"wrote {target} ({target.stat().st_size} bytes, "
+          f"sha256 {sha256_of(target)[:16]}...)")
     return 0
 
 

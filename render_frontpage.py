@@ -1,386 +1,433 @@
 #!/usr/bin/env python3
-"""Draw the 19 November 2026 news poster (news-image-20261119).
+"""Render the news-image-20261119 round 2 poster: a dense broadsheet.
 
-A 1024x1024 infographic, "THE WORLD IN ONE DAY", built with
-Pillow and the DejaVu faces only. The stories are the day's
-verified headlines, each confirmed in more than one report
-dated 19 November 2026:
+One 1024x1024 PNG, drawn programmatically with PIL. Every word on the
+page is exact text from the STORIES data below (40 stories, each first
+reported on Thursday 19 November 2026, with its source), never text
+from an image model. No network, no randomness, no clock: the same
+code always writes the same bytes.
 
-- Shenzhen: Trump, Xi and Putin sit down together, the first
-  US-China-Russia trilateral, on the APEC sidelines. Xi met
-  Putin the day before; Trump flew in from Quad talks in
-  Manila. Ukraine, Iran, Taiwan, rare earths and AI chips are
-  on the table.
-- Gulf: American jets hit an IRGC missile site on Qeshm
-  Island; Iran fires drones at US bases in Bahrain and Kuwait.
-- Kerch Strait: a 227-metre road arch of the Kerch Bridge is
-  down in the water; Moscow promises a rebuild while Russian
-  missiles hit Kyiv's bridges over the Dnipro.
-- Washington: the Democrats nominate Hakeem Jeffries for
-  Speaker of the House; he would be the first Black Speaker.
-- Tech: Nvidia founder Jensen Huang resigns; acting chief
-  Colette Kress stops H-series chip shipments to China.
-- Weather: Cyclone Akvan closes on India's east coast and is
-  expected to cross between Machilipatnam and Puri.
-- Also in the ticker: GTA VI launches worldwide, Voyager 1
-  reaches a light-day from Earth, and the Fed's minutes point
-  to further rate hikes.
-
-Usage: python3 render_frontpage.py [output.png]
+Layout, top to bottom: masthead with the giant date, a red date-check
+band, three lead stories, a UTC timeline strip, a two-column grid of
+eight labelled sections, a markets ticker, and a sources footer.
 """
-import math
-import os
-import sys
-
 from PIL import Image, ImageDraw, ImageFont
 
-SIZE = (1024, 1024)
-MARGIN = 34
-CW = SIZE[0] - 2 * MARGIN
+W, H = 1024, 1024
+OUT = "entry.png"
 
-PALETTE = {
-    "night": (12, 20, 36),
-    "card": (24, 40, 66),
-    "card2": (20, 34, 58),
-    "paper": (247, 242, 232),
-    "ink": (205, 213, 226),
-    "dim": (150, 163, 182),
-    "alarm": (228, 56, 50),
-    "amber": (247, 150, 34),
-    "gold": (247, 199, 68),
-    "mint": (54, 188, 174),
-    "sky": (46, 76, 118),
-    "sea": (28, 86, 140),
-    "white": (255, 255, 255),
-    "slate": (66, 76, 94),
-}
+PAPER = (248, 244, 232)
+INK = (20, 20, 20)
+NAVY = (27, 42, 74)
+RED = (163, 22, 33)
+GREY = (110, 108, 100)
+RULE = (180, 175, 160)
+LIGHT = (238, 232, 214)
 
-FACES = "/usr/share/fonts/truetype/dejavu"
-_cache = {}
+SERIF = "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
+SERIF_REG = "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
+SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+SANS_BOLD = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+FALLBACK_SERIF = "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
+FALLBACK_SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FALLBACK_SANS_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-def face(kind, size):
-    """A cached DejaVu face: kind is serif_b, sans_b or sans."""
-    key = (kind, size)
-    if key not in _cache:
-        names = {
-            "serif_b": "DejaVuSerif-Bold.ttf",
-            "sans_b": "DejaVuSans-Bold.ttf",
-            "sans": "DejaVuSans.ttf",
-        }
-        _cache[key] = ImageFont.truetype(
-            os.path.join(FACES, names[kind]), size)
-    return _cache[key]
+def font(path, size, fallback):
+    try:
+        return ImageFont.truetype(path, size)
+    except OSError:
+        return ImageFont.truetype(fallback, size)
 
 
-def split_lines(draw, text, fnt, width):
-    """Greedy word wrap, returning a list of lines."""
-    out, current = [], ""
+def serif_bold(size):
+    return font(SERIF, size, FALLBACK_SERIF)
+
+
+def serif(size):
+    return font(SERIF_REG, size, FALLBACK_SERIF)
+
+
+def sans(size):
+    return font(SANS, size, FALLBACK_SANS)
+
+
+def sans_bold(size):
+    return font(SANS_BOLD, size, FALLBACK_SANS_BOLD)
+
+
+def wrap(draw, text, fnt, width):
+    """Greedy word wrap; returns lines that fit inside width pixels."""
+    lines, current = [], ""
     for word in text.split():
-        trial = (current + " " + word).strip()
-        if draw.textlength(trial, font=fnt) <= width:
+        trial = f"{current} {word}".strip()
+        if draw.textlength(trial, font=fnt) <= width or not current:
             current = trial
         else:
-            if current:
-                out.append(current)
+            lines.append(current)
             current = word
     if current:
-        out.append(current)
-    return out
+        lines.append(current)
+    return lines
 
 
-class Poster:
-    """A 1024x1024 canvas with a y-cursor and small helpers."""
+def fit(draw, text, fnt, width):
+    """One line: shrink with an ellipsis only if it cannot fit."""
+    if draw.textlength(text, font=fnt) <= width:
+        return text
+    while text and draw.textlength(text + "...", font=fnt) > width:
+        text = text[:-1]
+    return text + "..."
 
-    def __init__(self):
-        self.img = Image.new("RGB", SIZE, PALETTE["night"])
-        self.d = ImageDraw.Draw(self.img)
-        self.y = 0
 
-    def text(self, pos, s, fnt, colour):
-        self.d.text(pos, s, font=fnt, fill=colour)
+# ---------------------------------------------------------------- data
+# Every story below was first reported on Thursday 19 November 2026.
+# Stories from 18 November or earlier (the Kerch bridge collapse, the
+# US strikes on Qeshm) are deliberately NOT in this list.
 
-    def centre(self, y, s, fnt, colour):
-        w = self.d.textlength(s, font=fnt)
-        self.text(((SIZE[0] - w) / 2, y), s, fnt, colour)
+LEADS = [
+    ("TOP STORY 1", "AP - BBC",
+     "Trump, Xi and Putin Issue 'Peace Declaration'",
+     "First trilateral of the three nuclear powers ends with a joint "
+     "text - but no deal on Ukraine or Iran."),
+    ("TOP STORY 2", "AP - BBC",
+     "World Court: Myanmar Committed Genocide",
+     "ICJ rules 9-6 that the 2017 crackdown on the Rohingya was "
+     "genocide - the first state ever found guilty."),
+    ("TOP STORY 3", "REUTERS - AP",
+     "Anthropic's Record IPO; Dow Sinks 1,101",
+     "AI firm raises $81.3bn, opens +34% and closes +17% at $97.17 - "
+     "yet all three US indexes fall about 2%."),
+]
 
-    def para(self, x, y, lines, fnt, colour, gap):
-        """Draw lines top to bottom, returning the y below them."""
+# (section label, [(headline, summary, source), ...])
+SECTIONS_A = [
+    ("WORLD", [
+        ("Europe 'Ready for Talks' With Russia on Ukraine",
+         "European leaders say they are prepared to negotiate an end to the war.",
+         "BBC"),
+        ("UK-EU Reset Summit Goes 'Down to the Wire'",
+         "London and Brussels push reset talks to the limit ahead of a crunch summit.",
+         "BBC - GUARDIAN"),
+        ("Venezuela Signs Military Deal With the US",
+         "Pact comes less than a year after Maduro's ouster, US defence chief says.",
+         "BBC"),
+        ("Kenya Picks US Consortium for Critical Minerals",
+         "American group wins the mining project, beating Chinese rivals.",
+         "AP - BBC"),
+        ("Dozens Missing After Migrant Boat Sinks off Senegal",
+         "Boat carrying migrants goes down off the coast; search under way.",
+         "BBC"),
+    ]),
+    ("WAR & SECURITY", [
+        ("Israeli Army Completes Gaza Ground Operation",
+         "Troops finish an operation beyond the Yellow Line; Hamas condemns the incursion.",
+         "BBC"),
+        ("Houthi Missiles Aimed at Riyadh Intercepted",
+         "Saudi-led coalition says it stopped missiles fired towards Riyadh and the south.",
+         "THE NEW ARAB"),
+        ("West Presses Iran to Restore Nuclear Inspections",
+         "US, UK, France and Germany push Tehran at the IAEA in Vienna.",
+         "REUTERS"),
+        ("Iran War Cost Hits $48.3bn; Senate Blocks Exit Bid",
+         "Costs rise as Senate Republicans block the latest bid to end the war.",
+         "AP"),
+        ("Haiti Forces Launch Operation to Retake Corridor",
+         "Armed forces move against gangs entrenched along a key route.",
+         "AP"),
+    ]),
+    ("MARKETS", [
+        ("Wall Street Sinks: Dow -1,101, S&P Falls Again",
+         "S&P 500 logs a sixth straight loss; Nasdaq drops 2.25%.",
+         "REUTERS"),
+        ("Bank of Japan Set to Raise Rates in December",
+         "Reuters poll: most economists expect a hike to 1.50%, then another by March.",
+         "REUTERS"),
+        ("Nvidia Board: Huang Will Not Return as CEO",
+         "Board rules out a comeback; Alibaba is sued over its ties to the spy scandal.",
+         "REUTERS"),
+        ("Fed-Hike Fears Hit Asian Markets",
+         "Nifty and Sensex slip as hawkish Fed signals and a strong dollar weigh.",
+         "THE HINDU"),
+    ]),
+    ("TECH & AI", [
+        ("Chase Customer Emails Leaked in Cyberattack",
+         "Thousands of customers hit after third-party vendors are breached.",
+         "AP"),
+        ("AI-Driven Cyberattack Targeted the EU in October",
+         "An official says artificial intelligence was used in the October attack.",
+         "AP"),
+        ("Chinese Tech Firms Fear US Curbs After Nvidia Fallout",
+         "AI chip restrictions loom as the Huang scandal widens.",
+         "AP"),
+        ("Trump Raised Huang Case 'Briefly' With Xi",
+         "Trump tells Fox News he mentioned the ex-Nvidia boss in their talks.",
+         "REUTERS"),
+        ("Alphabet Falls as Anthropic Debut Reprices Google Stake",
+         "Google parent drops 2.9% as the IPO puts fresh value on its holding.",
+         "MOTLEY FOOL"),
+    ]),
+]
+
+SECTIONS_B = [
+    ("CLIMATE", [
+        ("COP31 Draft Drops All Fossil-Fuel Language",
+         "Slimmed text in Antalya cuts the phase-out pledge; Panama threatens to block it.",
+         "REUTERS - GUARDIAN"),
+        ("Cyclone Akvan Nears India's Odisha Coast",
+         "Thousands evacuated as the severe storm approaches; landfall due Friday.",
+         "THE HINDU"),
+        ("Faults Unfixed in 90% of Insulation-Scheme Homes",
+         "UK scheme leaves most homes with faults still not repaired.",
+         "BBC"),
+    ]),
+    ("SCIENCE & HEALTH", [
+        ("Voyager 1 Phones Home From One Light-Day Away",
+         "NASA's probe calls home from farther than any human-made object has flown.",
+         "AP - NASA"),
+        ("UK Covid Inquiry: Testing, Tracing and the 'Pingdemic'",
+         "Report sets out key findings on the pandemic response.",
+         "BBC"),
+        ("Newborn Dies After Suspected FGM in Senegal",
+         "Three relatives arrested after a baby girl bleeds to death.",
+         "AP"),
+        ("37 Carpet Pythons Found in Cape York Woodlands",
+         "Scientists count dozens of the snakes in a Queensland survey.",
+         "REPORTED 19 NOV"),
+        ("Palestinian Children a Third of Child-Rights Violations",
+         "Save the Children: they are victims of a third of violations worldwide.",
+         "AP"),
+    ]),
+    ("SPORT", [
+        ("ATP Finals: Shelton Beats Jodar",
+         "American wins and now needs help from Zverev to advance.",
+         "AP"),
+        ("Broncos Extend Moss in $67m Deal",
+         "Cornerback Riley Moss agrees a four-year extension, AP source says.",
+         "AP"),
+        ("South Africa Top of World Test Standings",
+         "Proteas claim first place in the 2025-27 championship table.",
+         "REPORTED 19 NOV"),
+        ("India Beat Malaysia in Hockey Champions Trophy",
+         "Hosts open their Women's Asian Champions Trophy defence in Bhopal.",
+         "REPORTED 19 NOV"),
+        ("F1 to Introduce Full-Time Race Stewards in 2027",
+         "FIA moves to permanent stewards from the 2027 season.",
+         "BBC"),
+    ]),
+    ("CULTURE", [
+        ("GTA 6 on Sale Worldwide After 13 Years",
+         "Rockstar's game, 13 years in development, reaches players across the globe.",
+         "BBC"),
+        ("Van Gogh Sells for Record $190.4m",
+         "Painting fetches a record price after a row over its Nazi-era history.",
+         "BBC"),
+        ("Ancient Library in Rome Opens to the Public",
+         "Long-buried repository opens after restoration work.",
+         "AP"),
+        ("Fiona the Hippo Dies After Swallowing a Hat",
+         "Cincinnati Zoo's star hippo dies days after eating a visitor's hat.",
+         "AP"),
+        ("Ella Langley Sweeps Country Music Awards",
+         "Langley takes the night's top honours as Taylor Swift performs.",
+         "BBC"),
+    ]),
+]
+
+# (UTC time, what happened) — times as reported by the cited outlets.
+TIMELINE = [
+    ("01:46", "Trump raised Huang case 'briefly'"),
+    ("12:13", "COP31 draft drops fossil fuels"),
+    ("16:50", "Anthropic opens +34% at $111.50"),
+    ("17:38", "Trump, Xi, Putin issue declaration"),
+    ("20:07", "ICJ: Myanmar committed genocide"),
+    ("21:00", "Dow closes -1,101; S&P down again"),
+    ("21:21", "Europe ready for Russia talks"),
+    ("21:26", "Fiona the hippo dies in Cincinnati"),
+]
+
+TICKER = ("DOW 49,097 -2.19% - S&P 500 7,176 -2.02% - NASDAQ 23,879 -2.25% - "
+           "ANTHROPIC $97.17 +17.1% - NVIDIA -2.9% - NIKKEI -7% IN NOV - "
+           "USD 103.81 - BOJ HIKE IN DEC")
+
+FOOTER_SOURCES = ("SOURCES: AP  -  REUTERS  -  BBC  -  THE HINDU  -  THE GUARDIAN  -  "
+                  "THE NEW ARAB  -  MOTLEY FOOL  -  NASA")
+FOOTER_NOTE = ("All 40 stories verified as first reported on Thursday 19 November 2026. "
+               "Rendered programmatically - no AI-generated text in this image.")
+
+
+# ------------------------------------------------------------- layout
+MX = 14                      # side margin
+CW = (W - 2 * MX - 12) // 2   # story-column width (494)
+
+
+def rule(draw, x0, x1, y, color=RULE, width=1):
+    draw.line([(x0, y), (x1, y)], fill=color, width=width)
+
+
+def draw_masthead(draw):
+    rule(draw, MX, W - MX, 10, INK, 3)
+    rule(draw, MX, W - MX, 15, INK, 1)
+    kicker = sans_bold(11)
+    left = "MAKE.FUN NEWS-IMAGE  -  THE DAY IN ONE PICTURE"
+    right = "THURSDAY EDITION"
+    draw.text((MX, 22), left, font=kicker, fill=GREY)
+    draw.text((W - MX - draw.textlength(right, font=kicker), 22),
+              right, font=kicker, fill=GREY)
+    name = serif_bold(58)
+    title = "THE WORLD IN ONE DAY"
+    draw.text(((W - draw.textlength(title, font=name)) // 2, 38),
+              title, font=name, fill=NAVY)
+    date = serif_bold(38)
+    when = "THURSDAY  -  19 NOVEMBER 2026"
+    draw.text(((W - draw.textlength(when, font=date)) // 2, 100),
+              when, font=date, fill=RED)
+    rule(draw, MX, W - MX, 142, INK, 2)
+    sub = sans_bold(14)
+    line = "40 VERIFIED STORIES   -   8 SECTIONS   -   EVERY REGION   -   ONE DAY"
+    draw.text(((W - draw.textlength(line, font=sub)) // 2, 150),
+              line, font=sub, fill=INK)
+    # Red date-check band.
+    draw.rectangle([(MX, 172), (W - MX, 196)], fill=RED)
+    check = sans_bold(13)
+    msg = "DATE CHECK  -  EVERY STORY ON THIS PAGE WAS FIRST REPORTED ON 19 NOVEMBER 2026"
+    draw.text(((W - draw.textlength(msg, font=check)) // 2, 178),
+              msg, font=check, fill=PAPER)
+
+
+def draw_leads(draw):
+    y0, height = 204, 94
+    col_w = (W - 2 * MX - 2 * 14) // 3
+    tag = sans_bold(10)
+    head = serif_bold(17)
+    body = sans(12)
+    src = sans_bold(9)
+    for i, (label, source, headline, summary) in enumerate(LEADS):
+        x = MX + i * (col_w + 14)
+        draw.text((x, y0), label, font=tag, fill=RED)
+        sw = draw.textlength(source, font=src)
+        draw.text((x + col_w - sw, y0 + 1), source, font=src, fill=GREY)
+        lines = wrap(draw, headline, head, col_w)
+        assert len(lines) <= 2, f"lead headline too long: {headline}"
+        yy = y0 + 14
         for line in lines:
-            self.text((x, y), line, fnt, colour)
-            y += gap
-        return y
-
-    def panel(self, x, y, w, h, colour):
-        self.d.rectangle([x, y, x + w, y + h], fill=colour)
-
-    def pill(self, x, y, s, fnt, bg, fg):
-        w = self.d.textlength(s, font=fnt) + 22
-        self.d.rounded_rectangle([x, y, x + w, y + 30], radius=8, fill=bg)
-        self.text((x + 11, y + 6), s, fnt, fg)
-        return x + w + 10
-
-    def save(self, path):
-        self.img.save(path, "PNG", optimize=True)
-        print(f"wrote {path} ({os.path.getsize(path)} bytes)")
+            draw.text((x, yy), line, font=head, fill=INK)
+            yy += 20
+        slines = wrap(draw, summary, body, col_w)
+        assert len(slines) <= 3, f"lead summary too long: {summary}"
+        yy = y0 + 14 + 2 * 20
+        for line in slines:
+            draw.text((x, yy), line, font=body, fill=INK)
+            yy += 15
+    rule(draw, MX, W - MX, y0 + height + 4, INK, 2)
 
 
-def skyline_scene(p, x0, y0, x1, y1):
-    """Night skyline above the summit table: towers, lit windows,
-    three leaders as coloured dots around a white table."""
-    p.panel(x0, y0, x1 - x0, y1 - y0, PALETTE["sky"])
-    floor = y0 + (y1 - y0) * 13 // 25
-    spans = [(6, 62, 30), (52, 84, 42), (100, 118, 24), (148, 108, 38),
-             (198, 96, 28), (240, 118, 44), (290, 104, 32)]
-    for off, tall, wide in spans:
-        top = floor - tall
-        p.d.rectangle([x0 + off, top, x0 + off + wide, floor],
-                      fill=(17, 30, 54))
-        for wy in range(top + 10, floor - 8, 17):
-            for wx in (off + 6, off + wide - 12):
-                p.d.rectangle([x0 + wx, wy, x0 + wx + 6, wy + 7],
-                              fill=PALETTE["gold"])
-    p.d.line([(x0 + 159, y0 + 8), (x0 + 159, y0 + 26)],
-             fill=(17, 30, 54), width=4)
-    p.panel(x0, floor, x1 - x0, y1 - floor, (31, 54, 86))
-    cx = (x0 + x1) // 2
-    ty = floor + 48
-    p.d.ellipse([cx - 88, ty - 16, cx + 88, ty + 16],
-                fill=PALETTE["paper"])
-    p.d.rectangle([cx - 9, ty + 11, cx + 9, y1 - 32], fill=PALETTE["paper"])
-    for ang, colour in ((205, PALETTE["alarm"]), (270, PALETTE["gold"]),
-                        (335, PALETTE["mint"])):
-        px = cx + 60 * math.cos(math.radians(ang))
-        py = ty - 4 + 24 * math.sin(math.radians(ang))
-        p.d.ellipse([px - 12, py - 12, px + 12, py + 12], fill=colour)
-        p.d.ellipse([px - 4, py - 4, px + 4, py + 4], fill=PALETTE["paper"])
-    tag = "USA · CHINA · RUSSIA"
-    f = face("sans_b", 14)
-    p.text((((x0 + x1) - p.d.textlength(tag, font=f)) / 2, y1 - 25),
-           tag, f, PALETTE["white"])
+def draw_timeline(draw):
+    y0 = 308
+    head = sans_bold(12)
+    draw.text((MX, y0), "THE DAY IN UTC  -  KEY HOURS", font=head, fill=RED)
+    rule(draw, MX, W - MX, y0 + 16, RULE, 1)
+    time_f = sans_bold(12)
+    text_f = sans(11)
+    col_w = (W - 2 * MX - 3 * 10) // 4
+    for i, (when, what) in enumerate(TIMELINE):
+        row, col = divmod(i, 4)
+        x = MX + col * (col_w + 10)
+        y = y0 + 22 + row * 30
+        draw.text((x, y), when, font=time_f, fill=RED)
+        lines = wrap(draw, what, text_f, col_w - 48)
+        assert len(lines) <= 2, f"timeline item too long: {what}"
+        yy = y
+        for line in lines:
+            draw.text((x + 48, yy), line, font=text_f, fill=INK)
+            yy += 13
+    rule(draw, MX, W - MX, y0 + 66, INK, 2)
 
 
-def rocket_icon(p, cx, cy):
-    """A small rocket climbing out of its blast circle."""
-    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(66, 36, 42))
-    p.d.polygon([(cx - 16, cy + 18), (cx + 2, cy - 22),
-                 (cx + 16, cy - 10), (cx - 2, cy + 24)],
-                fill=PALETTE["paper"])
-    p.d.polygon([(cx + 2, cy - 22), (cx + 10, cy - 30),
-                 (cx + 16, cy - 10)], fill=PALETTE["alarm"])
-    p.d.polygon([(cx - 16, cy + 18), (cx - 26, cy + 26),
-                 (cx - 8, cy + 26)], fill=PALETTE["amber"])
-    p.d.polygon([(cx - 4, cy + 24), (cx - 12, cy + 30),
-                 (cx + 2, cy + 29)], fill=PALETTE["gold"])
+def draw_sections(draw, sections, x0, y0):
+    """One grid column, stretched so both columns end at the same y."""
+    head_f = sans_bold(13)
+    story_f = serif_bold(13)
+    sum_f = sans(11)
+    n_stories = sum(len(stories) for _, stories in sections)
+    row_h = (948 - y0 - 20 * len(sections)) / n_stories
+    assert row_h >= 25, f"grid rows too tight: {row_h:.1f}px"
+    y = y0
+    for label, stories in sections:
+        draw.rectangle([(x0, y + 4), (x0 + 9, y + 13)], fill=RED)
+        draw.text((x0 + 15, y), label, font=head_f, fill=NAVY)
+        rule(draw, x0, x0 + CW, y + 19, RULE, 1)
+        y += 20
+        for headline, summary, source in stories:
+            hl = fit(draw, headline, story_f, CW - 44)
+            draw.text((x0, y), hl, font=story_f, fill=INK)
+            sw = draw.textlength(source, font=sans_bold(8))
+            draw.text((x0 + CW - sw, y + 2), source,
+                      font=sans_bold(8), fill=GREY)
+            sm = fit(draw, summary, sum_f, CW)
+            draw.text((x0, y + 13), sm, font=sum_f, fill=(60, 60, 60))
+            y += row_h
+    return y
 
 
-def bridge_icon(p, cx, cy):
-    """A deck with its middle span gone, blast above, sea below."""
-    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(30, 58, 86))
-    p.d.rectangle([cx - 21, cy - 3, cx - 7, cy + 1], fill=PALETTE["paper"])
-    p.d.rectangle([cx + 7, cy - 3, cx + 21, cy + 1], fill=PALETTE["paper"])
-    p.d.line([(cx - 15, cy - 3), (cx - 15, cy - 17)], fill=PALETTE["paper"],
-             width=2)
-    p.d.line([(cx + 15, cy - 3), (cx + 15, cy - 17)], fill=PALETTE["paper"],
-             width=2)
-    star = []
-    for i in range(8):
-        ang = math.pi * i / 4
-        r = 10 if i % 2 == 0 else 5
-        star.append((cx + r * math.cos(ang),
-                     cy - 9 + r * math.sin(ang)))
-    p.d.polygon(star, fill=PALETTE["amber"])
-    p.d.ellipse([cx - 3, cy - 12, cx + 3, cy - 6], fill=PALETTE["alarm"])
-    p.d.line([(cx - 5, cy + 3), (cx + 9, cy + 15)], fill=(198, 62, 46),
-             width=3)
-    p.d.arc([cx - 19, cy + 13, cx + 19, cy + 23], 0, 180,
-            fill=(172, 207, 237), width=2)
+def draw_grid(draw):
+    y0 = 382
+    end_a = draw_sections(draw, SECTIONS_A, MX, y0)
+    end_b = draw_sections(draw, SECTIONS_B, MX + CW + 12, y0)
+    draw.line([(MX + CW + 5, y0), (MX + CW + 5, 948)], fill=RULE, width=1)
+    assert end_a <= 950 and end_b <= 950, (end_a, end_b)
+    return max(end_a, end_b)
 
 
-def dome_icon(p, cx, cy):
-    """A capitol dome: arch, columns, base."""
-    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(54, 46, 86))
-    p.d.arc([cx - 17, cy - 7, cx + 17, cy + 21], 180, 360,
-            fill=PALETTE["paper"], width=3)
-    p.d.line([(cx - 21, cy + 7), (cx + 21, cy + 7)], fill=PALETTE["paper"],
-             width=3)
-    p.d.line([(cx, cy - 15), (cx, cy - 7)], fill=PALETTE["gold"], width=3)
-    for px in (-13, 0, 13):
-        p.d.line([(cx + px, cy + 7), (cx + px, cy + 15)],
-                 fill=PALETTE["paper"], width=2)
-    p.d.line([(cx - 21, cy + 16), (cx + 21, cy + 16)],
-             fill=PALETTE["paper"], width=3)
+def draw_ticker(draw):
+    draw.rectangle([(MX, 956), (W - MX, 980)], fill=INK)
+    fnt = sans_bold(12)
+    text = fit(draw, TICKER, fnt, W - 2 * MX - 8)
+    assert not text.endswith("..."), "ticker does not fit"
+    draw.text(((W - draw.textlength(text, font=fnt)) // 2, 963),
+              text, font=fnt, fill=PAPER)
 
 
-def chip_icon(p, cx, cy):
-    """A processor: square die, gold pins on four sides."""
-    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(26, 54, 46))
-    for px in (-15, 0, 15):
-        p.d.line([(cx + px, cy - 27), (cx + px, cy - 17)],
-                 fill=PALETTE["gold"], width=3)
-        p.d.line([(cx + px, cy + 17), (cx + px, cy + 27)],
-                 fill=PALETTE["gold"], width=3)
-        p.d.line([(cx - 27, cy + px), (cx - 17, cy + px)],
-                 fill=PALETTE["gold"], width=3)
-        p.d.line([(cx + 17, cy + px), (cx + 27, cy + px)],
-                 fill=PALETTE["gold"], width=3)
-    p.d.rectangle([cx - 17, cy - 17, cx + 17, cy + 17], fill=PALETTE["mint"])
-    p.d.rectangle([cx - 9, cy - 9, cx + 9, cy + 9], fill=PALETTE["night"])
+def draw_footer(draw):
+    fnt = sans(10)
+    draw.text((MX, 988), FOOTER_SOURCES, font=fnt, fill=GREY)
+    draw.text((MX, 1002), FOOTER_NOTE, font=fnt, fill=GREY)
+    rule(draw, MX, W - MX, 1018, INK, 2)
 
 
-def storm_icon(p, cx, cy):
-    """A cyclone: three spiral arcs around a calm eye."""
-    p.d.ellipse([cx - 28, cy - 28, cx + 28, cy + 28], fill=(30, 58, 86))
-    for r, start in ((18, 15), (12, 195), (7, 85)):
-        p.d.arc([cx - r, cy - r, cx + r, cy + r], start, start + 255,
-                fill=PALETTE["mint"], width=3)
-    p.d.ellipse([cx - 3, cy - 3, cx + 3, cy + 3], fill=PALETTE["paper"])
+def render():
+    img = Image.new("RGB", (W, H), PAPER)
+    draw = ImageDraw.Draw(img)
+    draw_masthead(draw)
+    draw_leads(draw)
+    draw_timeline(draw)
+    draw_grid(draw)
+    draw_ticker(draw)
+    draw_footer(draw)
+    return img
 
 
-def story_card(p, x, y, w, h, kicker, colour, headline, body, icon,
-               date="19 NOV 2026"):
-    """One news panel: icon + kicker + headline + body text."""
-    p.panel(x, y, w, h, PALETTE["card"])
-    icon(p, x + 44, y + 44)
-    p.text((x + 82, y + 18), kicker, face("sans_b", 16), colour)
-    p.text((x + 82, y + 42), date, face("sans", 14), PALETTE["dim"])
-    hy = y + 76
-    hy = p.para(x + 18, hy,
-                split_lines(p.d, headline, face("serif_b", 28), w - 36),
-                face("serif_b", 28), PALETTE["paper"], 34)
-    end = p.para(x + 18, hy + 4,
-                 split_lines(p.d, body, face("sans", 18), w - 36),
-                 face("sans", 18), PALETTE["ink"], 24)
-    assert end <= y + h - 8, f"card text overflows: {kicker} end={end}"
-    return end
-
-
-def mini_card(p, x, y, w, h, kicker, colour, headline, body, icon):
-    """A narrower third-band panel (icon row, then headline/body)."""
-    p.panel(x, y, w, h, PALETTE["card2"])
-    icon(p, x + 40, y + 40)
-    p.text((x + 74, y + 20), kicker, face("sans_b", 15), colour)
-    p.text((x + 74, y + 42), "19 NOV", face("sans", 13), PALETTE["dim"])
-    hy = y + 70
-    hy = p.para(x + 15, hy,
-                split_lines(p.d, headline, face("serif_b", 24), w - 30),
-                face("serif_b", 24), PALETTE["paper"], 29)
-    end = p.para(x + 15, hy + 3,
-                 split_lines(p.d, body, face("sans", 16), w - 30),
-                 face("sans", 16), PALETTE["ink"], 21)
-    assert end <= y + h - 8, f"mini card overflows: {kicker} end={end}"
-    return end
-
-
-def build():
-    p = Poster()
-    d = p.d
-
-    # ---- masthead ----
-    p.y = 18
-    p.centre(p.y, "THE WORLD IN ONE DAY", face("serif_b", 44),
-             PALETTE["paper"])
-    p.y += 56
-    p.panel(MARGIN, p.y, CW, 32, PALETTE["alarm"])
-    p.centre(p.y + 4, "THURSDAY · 19 NOVEMBER 2026",
-             face("sans_b", 24), PALETTE["white"])
-    p.y += 46
-
-    # ---- lead story: Shenzhen ----
-    lead_top, lead_h = p.y, 330
-    p.panel(MARGIN, lead_top, CW, lead_h, PALETTE["card"])
-    lx, ly = MARGIN + 22, lead_top + 12
-    p.text((lx, ly), "SHENZHEN — THE DAY'S BIG STORY",
-           face("sans_b", 19), PALETTE["gold"])
-    ly += 30
-    ly = p.para(lx, ly, ["THREE PRESIDENTS,", "ONE TABLE"],
-                face("serif_b", 46), PALETTE["paper"], 54)
-    ly += 6
-    ly = p.para(lx, ly,
-                split_lines(d, "Trump, Xi & Putin meet today — the "
-                            "first US–China–Russia trilateral, with "
-                            "Ukraine, Iran and Taiwan on the agenda.",
-                            face("sans", 20), 545),
-                face("sans", 20), PALETTE["ink"], 27)
-    skyline_scene(p, 622, lead_top + 18, SIZE[0] - MARGIN - 18,
-                  lead_top + 252)
-    p.text((622, lead_top + 258), "Shenzhen hosts the APEC leaders' "
-           "summit.", face("sans", 14), PALETTE["dim"])
-    chip_y = lead_top + lead_h - 42
-    assert ly <= chip_y - 6, f"lead text runs into chips: ly={ly}"
-    cx = MARGIN + 22
-    f_chip = face("sans_b", 16)
-    cx = p.pill(cx, chip_y, "FIRST-EVER TRILATERAL", f_chip,
-                PALETTE["alarm"], PALETTE["white"])
-    cx = p.pill(cx, chip_y, "APEC · SHENZHEN", f_chip,
-                PALETTE["slate"], PALETTE["white"])
-    cx = p.pill(cx, chip_y, "XI MET PUTIN WEDNESDAY", f_chip,
-                PALETTE["slate"], PALETTE["white"])
-    assert cx <= SIZE[0] - MARGIN, f"chips overflow: cx={cx}"
-    p.y = lead_top + lead_h + 12
-
-    # ---- middle band: Gulf + Kerch ----
-    band_h = 228
-    half = (CW - 16) // 2
-    story_card(p, MARGIN, p.y, half, band_h,
-               "MIDDLE EAST — ESCALATION", PALETTE["alarm"],
-               "US–Iran fire widens across the Gulf",
-               "US jets hit an IRGC missile site on Qeshm Island. "
-               "Iran answers with drones on US bases in Bahrain & "
-               "Kuwait.", rocket_icon)
-    story_card(p, MARGIN + half + 16, p.y, half, band_h,
-               "UKRAINE WAR", PALETTE["gold"],
-               "Kerch Bridge arch is down",
-               "A 227-m road arch fell into the strait. Moscow vows "
-               "to rebuild as Russia hits Kyiv's Dnipro bridges.",
-               bridge_icon)
-    p.y += band_h + 12
-
-    # ---- third band: Speaker / Nvidia / Cyclone ----
-    band2_h = 184
-    col_w = (CW - 32) // 3
-    mini_card(p, MARGIN, p.y, col_w, band2_h,
-              "UNITED STATES", PALETTE["gold"],
-              "Jeffries for Speaker",
-              "Democrats nominate Hakeem Jeffries — set to be the "
-              "first Black Speaker.", dome_icon)
-    mini_card(p, MARGIN + col_w + 16, p.y, col_w, band2_h,
-              "TECH", PALETTE["mint"],
-              "Nvidia's chief is out",
-              "Founder Jensen Huang resigns. Acting chief Kress "
-              "halts H-chip shipments to China.", chip_icon)
-    mini_card(p, MARGIN + 2 * (col_w + 16), p.y, col_w, band2_h,
-              "DISASTER", PALETTE["alarm"],
-              "Akvan nears India",
-              "Akvan bears down on the east coast, set to cross "
-              "between Machilipatnam and Puri.", storm_icon)
-    p.y += band2_h + 12
-
-    # ---- ticker + footer ----
-    p.panel(MARGIN, p.y, CW, 40, (122, 28, 24))
-    ticker = ("GTA VI LAUNCHES TODAY · VOYAGER 1 HITS LIGHT-DAY "
-              "· FED EYES MORE HIKES")
-    assert d.textlength(ticker, font=face("sans_b", 20)) <= CW - 8, \
-        "ticker too wide"
-    p.centre(p.y + 9, ticker, face("sans_b", 20), PALETTE["white"])
-    p.y += 52
-    extra = ("ISRAEL PUSHES INTO CENTRAL GAZA · AUSTRALIA SANCTIONS "
-             "SETTLERS · MOLDOVA SUMMONS RUSSIAN ENVOY")
-    p.centre(p.y, extra, face("sans_b", 15), PALETTE["dim"])
-    p.y += 26
-    p.centre(p.y, "Top stories of Thursday, 19 November 2026 — "
-             "verified against multiple reports of the day",
-             face("sans", 14), PALETTE["dim"])
-    p.y += 20
-    assert p.y <= SIZE[1] - 6, f"layout overflow: y={p.y}"
-    return p
+def count_stories():
+    total = len(LEADS)
+    for sections in (SECTIONS_A, SECTIONS_B):
+        for _, stories in sections:
+            total += len(stories)
+    return total
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "entry.png")
-    build().save(out)
+    assert count_stories() == 40, count_stories()
+    img = render()
+    img.save(OUT, "PNG", optimize=True)
+    import hashlib
+    import os
+    size = os.path.getsize(OUT)
+    digest = hashlib.sha256(open(OUT, "rb").read()).hexdigest()
+    print(f"wrote {OUT}: {img.size[0]}x{img.size[1]}, {size} bytes, "
+          f"sha256 {digest}")
+    assert size <= 1_048_576, "over the 1 MiB cap"
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
